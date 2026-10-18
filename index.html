@@ -1,0 +1,980 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Generation.AI - Trợ Lý Học Tập Thông Minh Gemini</title>
+    
+    <!-- Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    
+    <!-- FontAwesome Icons -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    
+    <!-- Google Fonts Inter -->
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    
+    <!-- React & Babel CDNs -->
+    <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+    <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+
+    <style>
+        body {
+            font-family: 'Inter', sans-serif;
+        }
+        /* Custom scrollbar for dark theme */
+        ::-webkit-scrollbar {
+            width: 6px;
+            height: 6px;
+        }
+        ::-webkit-scrollbar-track {
+            background: #0f172a;
+        }
+        ::-webkit-scrollbar-thumb {
+            background: #334155;
+            border-radius: 9999px;
+        }
+        ::-webkit-scrollbar-thumb:hover {
+            background: #475569;
+        }
+    </style>
+</head>
+<body class="bg-slate-900 text-slate-100 min-h-screen">
+    <div id="root"></div>
+
+    <script type="text/babel">
+        const { useState, useEffect, useRef } = React;
+
+        const GRADE_LEVELS = [
+            { id: 'all', name: 'Mọi Cấp Học', icon: '🎓', style: 'Cung cấp hướng đi logic, công thức, giải thích dễ hiểu từng bước và đáp án chi tiết phù hợp mọi độ tuổi.' },
+            { id: 'primary', name: 'Tiểu học (Lớp 1-5)', icon: '🎨', style: 'Giải thích cực kỳ đơn giản, trực quan, dùng ví dụ vui nhộn, đồ họa so sánh gần gũi.' },
+            { id: 'middle', name: 'THCS (Lớp 6-9)', icon: '🚀', style: 'Giải thích rõ ràng, theo từng bước logic, công thức rõ ràng và ví dụ thực tế.' },
+            { id: 'high', name: 'THPT & Đại Học', icon: '🔬', style: 'Phân tích chuyên sâu, định hướng tư duy phản biện, liên hệ đề thi và kiến thức nâng cao.' }
+        ];
+
+        const SUBJECTS = [
+            { id: 'math', name: 'Toán Học', icon: '📐' },
+            { id: 'literature', name: 'Ngữ Văn', icon: '📚' },
+            { id: 'english', name: 'Tiếng Anh', icon: '🇬🇧' },
+            { id: 'physics', name: 'Vật Lý', icon: '⚡' },
+            { id: 'chemistry', name: 'Hóa Học', icon: '🧪' },
+            { id: 'biology', name: 'Sinh Học', icon: '🧬' },
+            { id: 'history', name: 'Lịch Sử', icon: '🏛️' },
+            { id: 'geography', name: 'Địa Lý', icon: '🌍' }
+        ];
+
+        function base64ToArrayBuffer(base64) {
+            const binaryString = window.atob(base64);
+            const len = binaryString.length;
+            const bytes = new Uint8Array(len);
+            for (let i = 0; i < len; i++) {
+                bytes[i] = binaryString.charCodeAt(i);
+            }
+            return bytes.buffer;
+        }
+
+        function pcmToWav(pcmData, sampleRate) {
+            const buffer = new ArrayBuffer(44 + pcmData.length * 2);
+            const view = new DataView(buffer);
+
+            function writeString(offset, string) {
+                for (let i = 0; i < string.length; i++) {
+                    view.setUint8(offset + i, string.charCodeAt(i));
+                }
+            }
+
+            writeString(0, 'RIFF');
+            view.setUint32(4, 36 + pcmData.length * 2, true);
+            writeString(8, 'WAVE');
+            writeString(12, 'fmt ');
+            view.setUint32(16, 16, true);
+            view.setUint16(20, 1, true);
+            view.setUint16(22, 1, true);
+            view.setUint32(24, sampleRate, true);
+            view.setUint32(28, sampleRate * 2, true);
+            view.setUint16(32, 2, true);
+            view.setUint16(34, 16, true);
+            writeString(36, 'data');
+            view.setUint32(40, pcmData.length * 2, true);
+
+            let offset = 44;
+            for (let i = 0; i < pcmData.length; i++, offset += 2) {
+                view.setInt16(offset, pcmData[i], true);
+            }
+
+            return new Blob([buffer], { type: 'audio/wav' });
+        }
+
+        function App() {
+            const [activeTab, setActiveTab] = useState('chat');
+            const [gradeLevel, setGradeLevel] = useState(GRADE_LEVELS[0]);
+            const [selectedSubject, setSelectedSubject] = useState(SUBJECTS[0]);
+            const [apiKey, setApiKey] = useState('');
+
+            // Chat State
+            const [messages, setMessages] = useState([
+                {
+                    id: 1,
+                    sender: 'ai',
+                    text: 'Xin chào, tôi có thể giúp gì cho bạn?',
+                    timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+                }
+            ]);
+            const [inputMessage, setInputMessage] = useState('');
+            const [isLoading, setIsLoading] = useState(false);
+            const [audioLoading, setAudioLoading] = useState(null);
+            const chatEndRef = useRef(null);
+
+            // Flashcards State
+            const [flashcards, setFlashcards] = useState([
+                { id: 1, front: 'Định luật II Newton là gì?', back: 'Gia tốc của một vật cùng hướng với lực tác dụng. F = m.a', subject: 'physics' },
+                { id: 2, front: 'Thế nào là từ láy?', back: 'Từ láy là từ phức có sự lặp lại âm đầu, vần hoặc cả hai.', subject: 'literature' }
+            ]);
+            const [currentCardIndex, setCurrentCardIndex] = useState(0);
+            const [isFlipped, setIsFlipped] = useState(false);
+            const [flashcardTopic, setFlashcardTopic] = useState('');
+            const [isGeneratingCards, setIsGeneratingCards] = useState(false);
+
+            // Quiz State
+            const [quizzes, setQuizzes] = useState([
+                {
+                    question: 'Nước sôi ở bao nhiêu độ C ở điều kiện tiêu chuẩn?',
+                    options: ['80°C', '90°C', '100°C', '120°C'],
+                    correct: 2,
+                    explanation: 'Nước sôi ở 100°C dưới áp suất 1 atm.'
+                }
+            ]);
+            const [currentQuizIndex, setCurrentQuizIndex] = useState(0);
+            const [selectedAnswer, setSelectedAnswer] = useState(null);
+            const [score, setScore] = useState(0);
+            const [quizTopic, setQuizTopic] = useState('');
+            const [isGeneratingQuiz, setIsGeneratingQuiz] = useState(false);
+
+            // Tasks State
+            const [tasks, setTasks] = useState([
+                { id: 1, title: 'Ôn tập chương 1 Toán Đại Số', duration: '45 phút', completed: false },
+                { id: 2, title: 'Học 10 từ vựng Tiếng Anh chủ đề Trường Học', duration: '30 phút', completed: true }
+            ]);
+            const [newTaskTitle, setNewTaskTitle] = useState('');
+
+            // Domain / Share Link State
+            const [customDomain, setCustomDomain] = useState('generation-ai.study');
+            const [isCopied, setIsCopied] = useState(false);
+            const [showShareModal, setShowShareModal] = useState(false);
+
+            useEffect(() => {
+                chatEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+            }, [messages, isLoading]);
+
+            const handleCopyLink = () => {
+                const fullUrl = `https://${customDomain}`;
+                
+                try {
+                    // Try modern API first with catch block for permissions/iFrame restrictions
+                    if (navigator.clipboard && navigator.clipboard.writeText) {
+                        navigator.clipboard.writeText(fullUrl).then(() => {
+                            setIsCopied(true);
+                            setTimeout(() => setIsCopied(false), 2500);
+                        }).catch(() => {
+                            // Fallback if permission rejected in iFrame
+                            fallbackCopyTextToClipboard(fullUrl);
+                        });
+                    } else {
+                        fallbackCopyTextToClipboard(fullUrl);
+                    }
+                } catch (err) {
+                    fallbackCopyTextToClipboard(fullUrl);
+                }
+            };
+
+            const fallbackCopyTextToClipboard = (text) => {
+                const textArea = document.createElement("textarea");
+                textArea.value = text;
+                // Avoid scrolling to bottom
+                textArea.style.top = "0";
+                textArea.style.left = "0";
+                textArea.style.position = "fixed";
+                textArea.style.opacity = "0";
+
+                document.body.appendChild(textArea);
+                textArea.focus();
+                textArea.select();
+
+                try {
+                    const successful = document.execCommand('copy');
+                    if (successful) {
+                        setIsCopied(true);
+                        setTimeout(() => setIsCopied(false), 2500);
+                    }
+                } catch (err) {
+                    console.error('Fallback copy failed', err);
+                }
+
+                document.body.removeChild(textArea);
+            };
+
+            const callGeminiChat = async (userPrompt) => {
+                const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-3-flash-preview:generateContent?key=${apiKey}`;
+                
+                const systemPrompt = `Bạn là "Generation.AI" chuyên trợ giúp học sinh mọi cấp học (${gradeLevel.name}).
+Môn học hiện tại: ${selectedSubject.name}.
+Phong cách giảng dạy: ${gradeLevel.style}.
+
+BẮT BUỘC Cấu trúc câu trả lời luôn bao gồm 2 phần rõ ràng:
+1. 📍 **HƯỚNG ĐI & PHƯƠNG PHÁP GIẢI**: Phân tích bài toán/câu hỏi, liệt kê công thức/lý thuyết áp dụng và các bước suy luận.
+2. 💡 **LỜI GIẢI CHI TIẾT & ĐÁP ÁN KHUYẾN NGHỊ**: Trình bày chi tiết từng bước tính toán/lập luận và kết luận đáp án cuối cùng.
+
+Hãy trình bày bằng tiếng Việt thân thiện, rõ ràng, giàu năng lượng tích cực!`;
+
+                const historyParts = messages.map(msg => ({
+                    role: msg.sender === 'user' ? 'user' : 'model',
+                    parts: [{ text: msg.text }]
+                }));
+
+                const payload = {
+                    contents: [
+                        ...historyParts,
+                        { role: 'user', parts: [{ text: userPrompt }] }
+                    ],
+                    systemInstruction: {
+                        parts: [{ text: systemPrompt }]
+                    }
+                };
+
+                let retries = 3;
+                let delay = 1000;
+
+                while (retries > 0) {
+                    try {
+                        const response = await fetch(apiUrl, {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify(payload)
+                        });
+
+                        if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
+                        const result = await response.json();
+                        
+                        const candidateText = result.candidates?.[0]?.content?.parts?.[0]?.text;
+                        if (candidateText) return candidateText;
+                        throw new Error("Không nhận được phản hồi từ Gemini API.");
+                    } catch (err) {
+                        retries--;
+                        if (retries === 0) throw err;
+                        await new Promise(r => setTimeout(r, delay));
+                        delay *= 2;
+                    }
+                }
+            };
+
+            const handleSendMessage = async (e) => {
+                e.preventDefault();
+                if (!inputMessage.trim() || isLoading) return;
+
+                const userText = inputMessage;
+                const userMsg = {
+                    id: Date.now(),
+                    sender: 'user',
+                    text: userText,
+                    timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+                };
+
+                setMessages((prev) => [...prev, userMsg]);
+                setInputMessage('');
+                setIsLoading(true);
+
+                try {
+                    const aiReply = await callGeminiChat(userText);
+                    const aiMsg = {
+                        id: Date.now() + 1,
+                        sender: 'ai',
+                        text: aiReply,
+                        timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+                    };
+                    setMessages((prev) => [...prev, aiMsg]);
+                } catch (error) {
+                    setMessages((prev) => [
+                        ...prev,
+                        {
+                            id: Date.now() + 1,
+                            sender: 'ai',
+                            text: '⚠️ Không thể kết nối với Generation.AI. Bạn hãy kiểm tra lại kết nối mạng nhé!',
+                            timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+                        }
+                    ]);
+                } finally {
+                    setIsLoading(false);
+                }
+            };
+
+            const handleSpeakText = async (text, msgId) => {
+                try {
+                    setAudioLoading(msgId);
+                    const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-tts:generateContent?key=${apiKey}`;
+                    
+                    const cleanText = text.replace(/[*#]/g, '');
+
+                    const payload = {
+                        contents: [{
+                            parts: [{ text: `Đọc đoạn hướng dẫn bài học sau bằng giọng đọc rõ ràng, tự nhiên: ${cleanText.slice(0, 300)}` }]
+                        }],
+                        generationConfig: {
+                            responseModalities: ["AUDIO"],
+                            speechConfig: {
+                                voiceConfig: {
+                                    prebuiltVoiceConfig: { voiceName: "Aoede" }
+                                }
+                            }
+                        }
+                    };
+
+                    const response = await fetch(apiUrl, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify(payload)
+                    });
+
+                    const result = await response.json();
+                    const part = result?.candidates?.[0]?.content?.parts?.[0];
+                    const audioDataBase64 = part?.inlineData?.data;
+                    const mimeType = part?.inlineData?.mimeType || '';
+
+                    if (audioDataBase64) {
+                        const sampleRateMatch = mimeType.match(/rate=(\d+)/);
+                        const sampleRate = sampleRateMatch ? parseInt(sampleRateMatch[1], 10) : 24000;
+                        
+                        const pcmBuffer = base64ToArrayBuffer(audioDataBase64);
+                        const pcm16 = new Int16Array(pcmBuffer);
+                        const wavBlob = pcmToWav(pcm16, sampleRate);
+                        const audioUrl = URL.createObjectURL(wavBlob);
+                        
+                        const audio = new Audio(audioUrl);
+                        audio.play();
+                    }
+                } catch (err) {
+                    console.error('Speech error:', err);
+                } finally {
+                    setAudioLoading(null);
+                }
+            };
+
+            const generateAIFlashcards = async (e) => {
+                e.preventDefault();
+                if (!flashcardTopic.trim() || isGeneratingCards) return;
+
+                setIsGeneratingCards(true);
+                const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-3-flash-preview:generateContent?key=${apiKey}`;
+
+                const prompt = `Tạo 4 thẻ ghi nhớ (Flashcards) về chủ đề "${flashcardTopic}" thuộc môn ${selectedSubject.name} dành cho học sinh level ${gradeLevel.name}.`;
+
+                const payload = {
+                    contents: [{ parts: [{ text: prompt }] }],
+                    generationConfig: {
+                        responseMimeType: "application/json",
+                        responseSchema: {
+                            type: "ARRAY",
+                            items: {
+                                type: "OBJECT",
+                                properties: {
+                                    front: { type: "STRING" },
+                                    back: { type: "STRING" }
+                                },
+                                propertyOrdering: ["front", "back"]
+                            }
+                        }
+                    }
+                };
+
+                try {
+                    const response = await fetch(apiUrl, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify(payload)
+                    });
+                    const result = await response.json();
+                    const jsonText = result.candidates?.[0]?.content?.parts?.[0]?.text;
+                    if (jsonText) {
+                        const parsedCards = JSON.parse(jsonText).map((item, idx) => ({
+                            id: Date.now() + idx,
+                            front: item.front,
+                            back: item.back,
+                            subject: selectedSubject.id
+                        }));
+                        setFlashcards(parsedCards);
+                        setCurrentCardIndex(0);
+                        setIsFlipped(false);
+                        setFlashcardTopic('');
+                    }
+                } catch (err) {
+                    console.error(err);
+                } finally {
+                    setIsGeneratingCards(false);
+                }
+            };
+
+            const generateAIQuiz = async (e) => {
+                e.preventDefault();
+                if (!quizTopic.trim() || isGeneratingQuiz) return;
+
+                setIsGeneratingQuiz(true);
+                const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-3-flash-preview:generateContent?key=${apiKey}`;
+
+                const prompt = `Tạo 3 câu hỏi trắc nghiệm về chủ đề "${quizTopic}" môn ${selectedSubject.name} (${gradeLevel.name}). Mỗi câu hỏi có 4 đáp án lựa chọn, chỉ số đáp án đúng (0-3) và phần giải thích ngắn gọn.`;
+
+                const payload = {
+                    contents: [{ parts: [{ text: prompt }] }],
+                    generationConfig: {
+                        responseMimeType: "application/json",
+                        responseSchema: {
+                            type: "ARRAY",
+                            items: {
+                                type: "OBJECT",
+                                properties: {
+                                    question: { type: "STRING" },
+                                    options: { type: "ARRAY", items: { type: "STRING" } },
+                                    correct: { type: "INTEGER" },
+                                    explanation: { type: "STRING" }
+                                },
+                                propertyOrdering: ["question", "options", "correct", "explanation"]
+                            }
+                        }
+                    }
+                };
+
+                try {
+                    const response = await fetch(apiUrl, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify(payload)
+                    });
+                    const result = await response.json();
+                    const jsonText = result.candidates?.[0]?.content?.parts?.[0]?.text;
+                    if (jsonText) {
+                        const parsedQuizzes = JSON.parse(jsonText);
+                        if (parsedQuizzes && parsedQuizzes.length > 0) {
+                            setQuizzes(parsedQuizzes);
+                            setCurrentQuizIndex(0);
+                            setSelectedAnswer(null);
+                            setScore(0);
+                            setQuizTopic('');
+                        }
+                    }
+                } catch (err) {
+                    console.error(err);
+                } finally {
+                    setIsGeneratingQuiz(false);
+                }
+            };
+
+            const handleAddTask = (e) => {
+                e.preventDefault();
+                if (!newTaskTitle.trim()) return;
+                setTasks([...tasks, { id: Date.now(), title: newTaskTitle, duration: '30 phút', completed: false }]);
+                setNewTaskTitle('');
+            };
+
+            const toggleTask = (id) => {
+                setTasks(tasks.map(t => t.id === id ? { ...t, completed: !t.completed } : t));
+            };
+
+            return (
+                <div className="flex flex-col h-screen bg-slate-900 text-slate-100 font-sans overflow-hidden">
+                    {/* Header */}
+                    <header className="flex flex-wrap items-center justify-between px-4 sm:px-6 py-3 bg-slate-800/90 border-b border-slate-700/80 gap-3">
+                        <div className="flex items-center gap-3">
+                            <div className="p-2.5 bg-gradient-to-tr from-indigo-500 via-purple-500 to-pink-500 rounded-xl shadow-md shadow-indigo-500/20">
+                                <i className="fa-solid fa-brain text-xl text-white"></i>
+                            </div>
+                            <div>
+                                <h1 className="text-lg font-bold bg-gradient-to-r from-indigo-400 via-purple-300 to-pink-300 bg-clip-text text-transparent flex items-center gap-2">
+                                    Generation.AI
+                                    <span className="text-[10px] bg-indigo-500/20 border border-indigo-400/30 text-indigo-300 px-2 py-0.5 rounded-full font-mono">
+                                        Gemini 3.0
+                                    </span>
+                                </h1>
+                                <p className="text-xs text-slate-400">Trợ Lý AI Học Tập Cho Học Sinh Mọi Cấp</p>
+                            </div>
+                        </div>
+
+                        {/* Grade & Subject Selectors + Share Link Button */}
+                        <div className="flex flex-wrap items-center gap-2">
+                            {/* Website Link Badge */}
+                            <button 
+                                onClick={() => setShowShareModal(true)}
+                                className="flex items-center gap-2 bg-gradient-to-r from-indigo-500/20 to-purple-500/20 hover:from-indigo-500/30 hover:to-purple-500/30 border border-indigo-400/40 text-indigo-300 px-3 py-1.5 rounded-lg text-xs font-mono transition shadow-sm"
+                                title="Click để tùy chỉnh & sao chép link website riêng"
+                            >
+                                <i className="fa-solid fa-globe text-indigo-400 animate-pulse"></i>
+                                <span className="font-semibold">{customDomain}</span>
+                                <i className="fa-solid fa-share-nodes text-[10px] text-indigo-300"></i>
+                            </button>
+
+                            <div className="flex items-center bg-slate-900/90 border border-slate-700/80 rounded-lg p-1">
+                                {GRADE_LEVELS.map((g) => (
+                                    <button
+                                        key={g.id}
+                                        onClick={() => setGradeLevel(g)}
+                                        className={`px-2.5 py-1.5 rounded-md text-xs font-medium transition flex items-center gap-1.5 ${
+                                            gradeLevel.id === g.id
+                                                ? 'bg-indigo-600 text-white shadow-sm'
+                                                : 'text-slate-400 hover:text-slate-200'
+                                        }`}
+                                        title={g.style}
+                                    >
+                                        <span>{g.icon}</span>
+                                        <span className="hidden sm:inline">{g.name.split(' ')[0]}</span>
+                                    </button>
+                                ))}
+                            </div>
+
+                            <select
+                                value={selectedSubject.id}
+                                onChange={(e) => setSelectedSubject(SUBJECTS.find(s => s.id === e.target.value))}
+                                className="bg-slate-900 border border-slate-700 text-xs text-slate-200 rounded-lg px-3 py-2 outline-none focus:border-indigo-500 transition cursor-pointer"
+                            >
+                                {SUBJECTS.map((s) => (
+                                    <option key={s.id} value={s.id}>
+                                        {s.icon} {s.name}
+                                    </option>
+                                ))}
+                            </select>
+                        </div>
+                    </header>
+
+                    {/* Share / Custom Domain Modal */}
+                    {showShareModal && (
+                        <div className="fixed inset-0 z-50 bg-slate-950/80 backdrop-blur-sm flex items-center justify-center p-4">
+                            {}
+                            <div className="bg-slate-800 border border-slate-700 rounded-2xl max-w-md w-full p-6 shadow-2xl space-y-4">
+                                <div className="flex items-center justify-between">
+                                    <h3 className="text-base font-bold text-slate-100 flex items-center gap-2">
+                                        <i className="fa-solid fa-link text-indigo-400"></i> Đường Link Website Riêng
+                                    </h3>
+                                    <button onClick={() => setShowShareModal(false)} className="text-slate-400 hover:text-slate-200 text-sm">
+                                        <i className="fa-solid fa-xmark"></i>
+                                    </button>
+                                </div>
+
+                                <p className="text-xs text-slate-400 leading-relaxed">
+                                    Đây là đường link website riêng dành cho dự án **Generation.AI** của bạn. Bạn có thể tự do đặt lại tên miền/subdomain và chia sẻ cho bạn bè cùng truy cập!
+                                </p>
+
+                                <div className="space-y-2">
+                                    <label className="text-[11px] font-semibold text-slate-300">Tùy chỉnh Tên Miền / Subdomain Riêng:</label>
+                                    <div className="flex gap-2">
+                                        <div className="flex-1 flex items-center bg-slate-900 border border-slate-700 rounded-xl px-3 py-2 text-xs text-slate-300">
+                                            <span className="text-slate-500 select-none">https://</span>
+                                            <input 
+                                                type="text" 
+                                                value={customDomain} 
+                                                onChange={(e) => setCustomDomain(e.target.value)}
+                                                className="bg-transparent border-none text-indigo-300 font-mono outline-none w-full ml-1 font-semibold"
+                                            />
+                                        </div>
+                                    </div>
+                                </div>
+
+                                <div className="pt-2 flex items-center gap-2">
+                                    <button
+                                        onClick={handleCopyLink}
+                                        className="flex-1 bg-gradient-to-r from-indigo-600 to-purple-600 hover:from-indigo-500 hover:to-purple-500 text-white font-medium px-4 py-2.5 rounded-xl text-xs transition flex items-center justify-center gap-2 shadow-lg"
+                                    >
+                                        <i className={`fa-solid ${isCopied ? 'fa-check text-emerald-300' : 'fa-copy'}`}></i>
+                                        {isCopied ? 'Đã Sao Chép Link Website!' : 'Sao Chép Đường Link'}
+                                    </button>
+                                    <button
+                                        onClick={() => setShowShareModal(false)}
+                                        className="bg-slate-700 hover:bg-slate-600 text-slate-300 px-4 py-2.5 rounded-xl text-xs font-medium transition"
+                                    >
+                                        Đóng
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
+                    )}
+
+                    {/* Main Workspace */}
+                    <div className="flex-1 flex overflow-hidden">
+                        {/* Sidebar */}
+                        <nav className="w-16 md:w-64 bg-slate-800/40 border-r border-slate-700/60 p-3 flex flex-col gap-2 shrink-0">
+                            <button
+                                onClick={() => setActiveTab('chat')}
+                                className={`w-full flex items-center gap-3 px-3 py-3 rounded-xl transition font-medium text-sm ${
+                                    activeTab === 'chat'
+                                        ? 'bg-gradient-to-r from-indigo-600 to-purple-600 text-white shadow-md'
+                                        : 'text-slate-400 hover:bg-slate-800 hover:text-slate-200'
+                                }`}
+                            >
+                                <i className="fa-regular fa-comments text-lg"></i>
+                                <span className="hidden md:inline">Hỏi Đáp Generation.AI</span>
+                            </button>
+
+                            <button
+                                onClick={() => setActiveTab('flashcards')}
+                                className={`w-full flex items-center gap-3 px-3 py-3 rounded-xl transition font-medium text-sm ${
+                                    activeTab === 'flashcards'
+                                        ? 'bg-gradient-to-r from-indigo-600 to-purple-600 text-white shadow-md'
+                                        : 'text-slate-400 hover:bg-slate-800 hover:text-slate-200'
+                                }`}
+                            >
+                                <i className="fa-solid fa-layer-group text-lg"></i>
+                                <span className="hidden md:inline">Tạo Flashcards AI</span>
+                            </button>
+
+                            <button
+                                onClick={() => setActiveTab('quiz')}
+                                className={`w-full flex items-center gap-3 px-3 py-3 rounded-xl transition font-medium text-sm ${
+                                    activeTab === 'quiz'
+                                        ? 'bg-gradient-to-r from-indigo-600 to-purple-600 text-white shadow-md'
+                                        : 'text-slate-400 hover:bg-slate-800 hover:text-slate-200'
+                                }`}
+                            >
+                                <i className="fa-regular fa-circle-question text-lg"></i>
+                                <span className="hidden md:inline">Đề Trắc Nghiệm AI</span>
+                            </button>
+
+                            <button
+                                onClick={() => setActiveTab('plan')}
+                                className={`w-full flex items-center gap-3 px-3 py-3 rounded-xl transition font-medium text-sm ${
+                                    activeTab === 'plan'
+                                        ? 'bg-gradient-to-r from-indigo-600 to-purple-600 text-white shadow-md'
+                                        : 'text-slate-400 hover:bg-slate-800 hover:text-slate-200'
+                                }`}
+                            >
+                                <i className="fa-regular fa-calendar-check text-lg"></i>
+                                <span className="hidden md:inline">Lập Kế Hoạch Học</span>
+                            </button>
+
+                            <div className="mt-auto hidden md:block p-3.5 rounded-xl bg-slate-800/80 border border-slate-700/60 text-xs">
+                                <div className="flex items-center gap-2 text-indigo-400 font-semibold mb-1">
+                                    <i className="fa-solid fa-wand-magic-sparkles"></i> Chế độ giảng dạy
+                                </div>
+                                <p className="text-slate-300 leading-relaxed text-[11px]">
+                                    {gradeLevel.style}
+                                </p>
+                            </div>
+                        </nav>
+
+                        {/* Content Body */}
+                        <main className="flex-1 flex flex-col bg-slate-900/50 overflow-hidden">
+                            {}
+                            {activeTab === 'chat' && (
+                                <div className="flex-1 flex flex-col h-full overflow-hidden">
+                                    <div className="flex-1 overflow-y-auto p-4 md:p-6 space-y-4">
+                                        {messages.map((msg) => (
+                                            <div
+                                                key={msg.id}
+                                                className={`flex items-start gap-3 max-w-3xl ${
+                                                    msg.sender === 'user' ? 'ml-auto flex-row-reverse' : ''
+                                                }`}
+                                            >
+                                                <div
+                                                    className={`w-8 h-8 rounded-full flex items-center justify-center shrink-0 shadow-md ${
+                                                        msg.sender === 'user'
+                                                            ? 'bg-indigo-600 text-white'
+                                                            : 'bg-purple-600 text-white'
+                                                    }`}
+                                                >
+                                                    {msg.sender === 'user' ? <i className="fa-solid fa-user text-xs"></i> : <i className="fa-solid fa-robot text-xs"></i>}
+                                                </div>
+
+                                                <div
+                                                    className={`p-4 rounded-2xl text-sm leading-relaxed relative group ${
+                                                        msg.sender === 'user'
+                                                            ? 'bg-indigo-600 text-white rounded-tr-none'
+                                                            : 'bg-slate-800 text-slate-200 border border-slate-700/80 rounded-tl-none shadow-lg'
+                                                    }`}
+                                                >
+                                                    <div className="whitespace-pre-wrap">{msg.text}</div>
+                                                    
+                                                    <div className="flex items-center justify-between mt-2 pt-2 border-t border-slate-700/40 text-[10px] text-slate-400">
+                                                        <span>{msg.timestamp}</span>
+                                                        {msg.sender === 'ai' && (
+                                                            <button
+                                                                onClick={() => handleSpeakText(msg.text, msg.id)}
+                                                                disabled={audioLoading === msg.id}
+                                                                className="flex items-center gap-1 hover:text-indigo-300 transition px-2 py-0.5 rounded bg-slate-700/50"
+                                                            >
+                                                                {audioLoading === msg.id ? (
+                                                                    <i className="fa-solid fa-spinner animate-spin text-indigo-400"></i>
+                                                                ) : (
+                                                                    <i className="fa-solid fa-volume-high"></i>
+                                                                )}
+                                                                <span>Nghe AI đọc</span>
+                                                            </button>
+                                                        )}
+                                                    </div>
+                                                </div>
+                                            </div>
+                                        ))}
+
+                                        {isLoading && (
+                                            <div className="flex items-center gap-3">
+                                                <div className="w-8 h-8 rounded-full bg-purple-600 text-white flex items-center justify-center">
+                                                    <i className="fa-solid fa-robot text-xs animate-pulse"></i>
+                                                </div>
+                                                <div className="bg-slate-800 border border-slate-700/60 px-4 py-3 rounded-2xl rounded-tl-none flex items-center gap-2">
+                                                    <span className="text-xs text-purple-300 font-medium">Generation.AI đang suy luận bài giải...</span>
+                                                    <span className="w-1.5 h-1.5 bg-purple-400 rounded-full animate-ping"></span>
+                                                </div>
+                                            </div>
+                                        )}
+                                        <div ref={chatEndRef} />
+                                    </div>
+
+                                    <form onSubmit={handleSendMessage} className="p-4 bg-slate-800/70 border-t border-slate-700/60 flex gap-2">
+                                        <input
+                                            type="text"
+                                            value={inputMessage}
+                                            onChange={(e) => setInputMessage(e.target.value)}
+                                            placeholder={`Đặt câu hỏi bài tập ${selectedSubject.name} (${gradeLevel.name})...`}
+                                            className="flex-1 bg-slate-900 border border-slate-700 rounded-xl px-4 py-3 text-sm text-slate-100 placeholder-slate-500 outline-none focus:border-indigo-500 transition"
+                                        />
+                                        <button
+                                            type="submit"
+                                            disabled={!inputMessage.trim() || isLoading}
+                                            className="bg-gradient-to-r from-indigo-600 to-purple-600 hover:from-indigo-500 hover:to-purple-500 disabled:opacity-50 text-white px-5 py-3 rounded-xl transition flex items-center justify-center shadow-lg font-medium"
+                                        >
+                                            <i className="fa-solid fa-paper-plane"></i>
+                                        </button>
+                                    </form>
+                                </div>
+                            )}
+
+                            {}
+                            {activeTab === 'flashcards' && (
+                                <div className="flex-1 overflow-y-auto p-6 flex flex-col items-center justify-start gap-6">
+                                    <div className="w-full max-w-xl text-center">
+                                        <h2 className="text-xl font-bold mb-1">Tạo Thẻ Ghi Nhớ Kiến Thức Với Generation.AI</h2>
+                                        <p className="text-xs text-slate-400">Nhập chủ đề để Generation.AI tự động tổng hợp bộ Flashcards chuẩn xác</p>
+                                    </div>
+
+                                    <form onSubmit={generateAIFlashcards} className="w-full max-w-md flex gap-2">
+                                        <input
+                                            type="text"
+                                            placeholder="Chủ đề (ví dụ: Quang hợp, Các thì trong Tiếng Anh)..."
+                                            value={flashcardTopic}
+                                            onChange={(e) => setFlashcardTopic(e.target.value)}
+                                            className="flex-1 bg-slate-800 border border-slate-700 rounded-xl px-4 py-2.5 text-xs text-slate-100 outline-none focus:border-indigo-500"
+                                        />
+                                        <button
+                                            type="submit"
+                                            disabled={isGeneratingCards || !flashcardTopic.trim()}
+                                            className="bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 text-white px-4 py-2.5 rounded-xl text-xs font-medium transition flex items-center gap-1.5"
+                                        >
+                                            {isGeneratingCards ? <i className="fa-solid fa-spinner animate-spin"></i> : <i className="fa-solid fa-wand-magic-sparkles"></i>}
+                                            Tạo Thẻ AI
+                                        </button>
+                                    </form>
+
+                                    {flashcards.length > 0 && (
+                                        <div
+                                            onClick={() => setIsFlipped(!isFlipped)}
+                                            className="w-full max-w-md h-64 bg-gradient-to-b from-slate-800 to-slate-800/90 border border-slate-700/80 rounded-2xl p-6 flex flex-col items-center justify-center text-center cursor-pointer hover:border-indigo-500/50 transition-all shadow-xl relative select-none"
+                                        >
+                                            <span className="absolute top-4 right-4 text-[10px] font-mono bg-slate-700 px-2.5 py-1 rounded-full text-indigo-300">
+                                                {isFlipped ? 'Mặt sau (Giải thích)' : 'Mặt trước (Khái niệm)'}
+                                            </span>
+                                            <div className="text-base font-medium text-slate-100 px-4">
+                                                {isFlipped ? flashcards[currentCardIndex].back : flashcards[currentCardIndex].front}
+                                            </div>
+                                            <span className="text-xs text-indigo-400 mt-6 flex items-center gap-1">
+                                                <i className="fa-solid fa-rotate-left"></i> Bấm để lật thẻ
+                                            </span>
+                                        </div>
+                                    )}
+
+                                    {flashcards.length > 0 && (
+                                        <div className="flex items-center gap-4">
+                                            <button
+                                                onClick={() => {
+                                                    setIsFlipped(false);
+                                                    setCurrentCardIndex((prev) => (prev > 0 ? prev - 1 : flashcards.length - 1));
+                                                }}
+                                                className="px-4 py-2 bg-slate-800 hover:bg-slate-700 border border-slate-700 rounded-lg text-xs"
+                                            >
+                                                Thẻ Trước
+                                            </button>
+                                            <span className="text-xs text-slate-400 font-mono">
+                                                {currentCardIndex + 1} / {flashcards.length}
+                                            </span>
+                                            <button
+                                                onClick={() => {
+                                                    setIsFlipped(false);
+                                                    setCurrentCardIndex((prev) => (prev < flashcards.length - 1 ? prev + 1 : 0));
+                                                }}
+                                                className="px-4 py-2 bg-slate-800 hover:bg-slate-700 border border-slate-700 rounded-lg text-xs"
+                                            >
+                                                Thẻ Tiếp
+                                            </button>
+                                        </div>
+                                    )}
+                                </div>
+                            )}
+
+                            {}
+                            {activeTab === 'quiz' && (
+                                <div className="flex-1 overflow-y-auto p-6 flex flex-col items-center justify-start gap-6">
+                                    <div className="w-full max-w-xl flex items-center justify-between border-b border-slate-800 pb-4">
+                                        <div>
+                                            <h2 className="text-xl font-bold">Luyện Trắc Nghiệm Thông Minh AI</h2>
+                                            <p className="text-xs text-slate-400">Generation.AI tự động tạo bộ câu hỏi ôn tập theo bài học</p>
+                                        </div>
+                                        <div className="flex items-center gap-1.5 bg-indigo-500/10 text-indigo-400 px-3 py-1.5 rounded-lg border border-indigo-500/20 text-xs font-bold">
+                                            <i className="fa-solid fa-award"></i> Điểm: {score}
+                                        </div>
+                                    </div>
+
+                                    <form onSubmit={generateAIQuiz} className="w-full max-w-xl flex gap-2">
+                                        <input
+                                            type="text"
+                                            placeholder="Nhập bài học cần tạo bộ đề trắc nghiệm..."
+                                            value={quizTopic}
+                                            onChange={(e) => setQuizTopic(e.target.value)}
+                                            className="flex-1 bg-slate-800 border border-slate-700 rounded-xl px-4 py-2.5 text-xs text-slate-100 outline-none focus:border-indigo-500"
+                                        />
+                                        <button
+                                            type="submit"
+                                            disabled={isGeneratingQuiz || !quizTopic.trim()}
+                                            className="bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 text-white px-4 py-2.5 rounded-xl text-xs font-medium transition flex items-center gap-1.5"
+                                        >
+                                            {isGeneratingQuiz ? <i className="fa-solid fa-spinner animate-spin"></i> : <i className="fa-solid fa-bolt"></i>}
+                                            Tạo Bộ Đề
+                                        </button>
+                                    </form>
+
+                                    {quizzes.length > 0 && (
+                                        <div className="w-full max-w-xl bg-slate-800 border border-slate-700/80 rounded-2xl p-6 space-y-5 shadow-xl">
+                                            <div className="flex items-center justify-between">
+                                                <span className="text-xs font-semibold text-indigo-400 bg-indigo-500/10 px-2.5 py-1 rounded-md border border-indigo-500/20">
+                                                    Câu hỏi {currentQuizIndex + 1}/{quizzes.length}
+                                                </span>
+                                            </div>
+
+                                            <h3 className="text-sm font-medium text-slate-100 leading-relaxed">
+                                                {quizzes[currentQuizIndex].question}
+                                            </h3>
+
+                                            <div className="space-y-2.5">
+                                                {quizzes[currentQuizIndex].options.map((opt, idx) => {
+                                                    let style = "bg-slate-900 border-slate-700/80 text-slate-300 hover:border-slate-500";
+                                                    if (selectedAnswer !== null) {
+                                                        if (idx === quizzes[currentQuizIndex].correct) {
+                                                            style = "bg-emerald-500/20 border-emerald-500 text-emerald-200 font-medium";
+                                                        } else if (selectedAnswer === idx) {
+                                                            style = "bg-rose-500/20 border-rose-500 text-rose-200";
+                                                        }
+                                                    }
+
+                                                    return (
+                                                        <button
+                                                            key={idx}
+                                                            onClick={() => selectedAnswer === null && setSelectedAnswer(idx)}
+                                                            className={`w-full text-left p-3.5 rounded-xl border transition flex items-center justify-between text-xs ${style}`}
+                                                        >
+                                                            <span>{opt}</span>
+                                                            {selectedAnswer !== null && idx === quizzes[currentQuizIndex].correct && (
+                                                                <i className="fa-solid fa-circle-check text-emerald-400"></i>
+                                                            )}
+                                                            {selectedAnswer === idx && idx !== quizzes[currentQuizIndex].correct && (
+                                                                <i className="fa-solid fa-circle-xmark text-rose-400"></i>
+                                                            )}
+                                                        </button>
+                                                    );
+                                                })}
+                                            </div>
+
+                                            {selectedAnswer !== null && (
+                                                <div className="p-3 bg-indigo-500/10 border border-indigo-500/20 rounded-xl text-xs text-indigo-200 leading-relaxed">
+                                                    💡 <strong>Giải thích từ Generation.AI:</strong> {quizzes[currentQuizIndex].explanation}
+                                                </div>
+                                            )}
+
+                                            <div className="flex justify-end pt-2">
+                                                <button
+                                                    onClick={() => {
+                                                        if (selectedAnswer === quizzes[currentQuizIndex].correct) {
+                                                            setScore(score + 10);
+                                                        }
+                                                        setSelectedAnswer(null);
+                                                        if (currentQuizIndex < quizzes.length - 1) {
+                                                            setCurrentQuizIndex(currentQuizIndex + 1);
+                                                        } else {
+                                                            setCurrentQuizIndex(0);
+                                                        }
+                                                    }}
+                                                    disabled={selectedAnswer === null}
+                                                    className="bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 text-white px-5 py-2 rounded-xl text-xs font-medium transition"
+                                                >
+                                                    Câu tiếp theo →
+                                                </button>
+                                            </div>
+                                        </div>
+                                    )}
+                                </div>
+                            )}
+
+                            {}
+                            {activeTab === 'plan' && (
+                                <div className="flex-1 overflow-y-auto p-6 flex flex-col items-center justify-start gap-6">
+                                    <div className="w-full max-w-xl">
+                                        <h2 className="text-xl font-bold mb-1">Kế Hoạch Học Tập Hàng Ngày</h2>
+                                        <p className="text-xs text-slate-400">Theo dõi tiến độ hoàn thành các mục tiêu học tập</p>
+                                    </div>
+
+                                    <form onSubmit={handleAddTask} className="w-full max-w-xl flex gap-2">
+                                        <input
+                                            type="text"
+                                            placeholder="Thêm mục tiêu mới (ví dụ: Đọc lại 2 trang văn bản)..."
+                                            value={newTaskTitle}
+                                            onChange={(e) => setNewTaskTitle(e.target.value)}
+                                            className="flex-1 bg-slate-800 border border-slate-700 rounded-xl px-4 py-2.5 text-xs text-slate-100 outline-none focus:border-indigo-500"
+                                        />
+                                        <button
+                                            type="submit"
+                                            className="bg-indigo-600 hover:bg-indigo-500 text-white px-4 py-2.5 rounded-xl text-xs font-medium transition shrink-0"
+                                        >
+                                            + Thêm
+                                        </button>
+                                    </form>
+
+                                    <div className="w-full max-w-xl space-y-2.5">
+                                        {tasks.map((task) => (
+                                            <div
+                                                key={task.id}
+                                                onClick={() => toggleTask(task.id)}
+                                                className={`p-3.5 rounded-xl border transition flex items-center justify-between cursor-pointer ${
+                                                    task.completed
+                                                        ? 'bg-slate-800/40 border-slate-800 text-slate-500 line-through'
+                                                        : 'bg-slate-800 border-slate-700/80 text-slate-200 hover:border-slate-600'
+                                                }`}
+                                            >
+                                                <div className="flex items-center gap-3">
+                                                    <div className={`w-4 h-4 rounded border flex items-center justify-center ${
+                                                        task.completed ? 'bg-indigo-600 border-indigo-600 text-white' : 'border-slate-600'
+                                                    }`}>
+                                                        {task.completed && <i className="fa-solid fa-check text-[10px]"></i>}
+                                                    </div>
+                                                    <span className="text-xs font-medium">{task.title}</span>
+                                                </div>
+                                                <span className="text-[10px] text-slate-400 font-mono bg-slate-900/60 px-2 py-0.5 rounded border border-slate-800">
+                                                    ⏱️ {task.duration}
+                                                </span>
+                                            </div>
+                                        ))}
+                                    </div>
+                                </div>
+                            )}
+
+                        </main>
+                    </div>
+                </div>
+            );
+        }
+
+        const root = ReactDOM.createRoot(document.getElementById('root'));
+        root.render(<App />);
+    </script>
+</body>
+  </html>
